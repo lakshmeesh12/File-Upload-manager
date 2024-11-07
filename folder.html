@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>File Upload</title>
+    <style>
+        /* Global styling */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+  
+        body, html {
+            height: 100%;
+            font-family: Arial, sans-serif;
+            background-color: #f0f2f5;
+            transition: background 1s ease;
+            overflow: hidden;
+        }
+
+        /* Container and layout */
+        .container {
+            display: flex;
+            height: 100vh;
+        }
+
+        .sidebar {
+        width: 25%;
+        background-color: #333;
+        color: white;
+        padding: 10px;
+        overflow-y: auto; /* Only vertical scrolling */
+        overflow-x: auto; /* Disable horizontal scrolling */
+    }
+
+        .file-list {
+            list-style-type: none;
+            padding: 0;
+        }
+
+        .file-list li {
+        padding: 10px;
+        cursor: pointer;
+        border-bottom: 1px solid #555;
+        display: flex;
+        justify-content: space-between;
+        align-items: center;
+        transition: background 0.3s;
+        font-size: 14px; /* Reduce font size for a cleaner look */
+    }
+
+        .file-list li:hover {
+            background-color: #555;
+        }
+
+        .delete-btn {
+        background-color: red;
+        color: white;
+        border: none;
+        padding: 5px 8px;
+        font-size: 12px; /* Smaller font size for the delete button */
+        cursor: pointer;
+        border-radius: 5px;
+        white-space: nowrap;
+        }
+
+        /* Main content styling */
+        .content {
+            width: 75%;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            position: relative;
+            padding: 20px;
+            text-align: center;
+        }
+
+        h1 {
+            margin-bottom: 20px;
+            font-size: 2em;
+            color: #333;
+        }
+
+        .storage-options {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+        }
+
+        /* Folder selection styling */
+        .storage-card {
+            width: 200px;
+            height: 250px;
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            color: white;
+            font-size: 1.5em;
+            cursor: pointer;
+            transition: transform 0.5s ease, box-shadow 0.5s ease;
+            position: relative;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+        }
+
+        .storage-card img.icon {
+            width: 80px;
+            margin-bottom: 15px;
+            transition: transform 0.5s;
+        }
+
+        .storage-card:hover {
+            transform: scale(1.1);
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .storage-card:hover img.icon {
+            transform: scale(1.2);
+        }
+
+        /* Unique background colors */
+        .endoc {
+            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
+        }
+
+        .ensight {
+            background: linear-gradient(135deg, #ff4b1f 0%, #ff9068 100%);
+        }
+
+        .envision {
+            background: linear-gradient(135deg, #1e90ff 0%, #00bfff 100%);
+        }
+
+        /* Upload form styling */
+        #uploadForm {
+            display: none;
+            position: absolute;
+            bottom: 20px;
+            width: 100%;
+            text-align: center;
+        }
+
+        #uploadForm input[type="file"] {
+            margin-top: 10px;
+        }
+
+        #uploadButton {
+            margin-top: 10px;
+            padding: 10px 20px;
+            font-size: 1em;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        #uploadButton:hover {
+            background-color: #45a049;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar for file listing -->
+        <div class="sidebar">
+            <h3>Files in Folder</h3>
+            <ul id="fileList" class="file-list"></ul>
+        </div>
+
+        <!-- Main content -->
+        <div class="content">
+            <h1>Select Your Folder</h1>
+            <div class="storage-options">
+                <div class="storage-card endoc" onclick="loadFiles('endoc')">
+                    <img src="https://th.bing.com/th/id/OIP.YBMUxO5QF_lElLt_QeojKgHaE1?pid=ImgDet&w=178&h=116&c=7&dpr=1.5" class="icon" alt="Endoc">
+                    <p>Endoc</p>
+                </div>
+                <div class="storage-card ensight" onclick="loadFiles('ensight')">
+                    <img src="https://th.bing.com/th/id/OIP.8DfcvZK3t8zbwxqdV4Ix4QHaD4?w=1200&h=630&rs=1&pid=ImgDetMain" class="icon" alt="Ensight">
+                    <p>Ensight</p>
+                </div>
+                <div class="storage-card envision" onclick="loadFiles('envision')">
+                    <img src="https://static.vecteezy.com/system/resources/previews/026/529/458/original/simple-jpeg-file-icon-jpeg-extension-vector.jpg" class="icon" alt="Envision">
+                    <p>Envision</p>
+                </div>
+            </div>
+
+            <!-- Upload form -->
+            <div id="uploadForm">
+                <form id="formUpload" action="{{ url_for('upload_files') }}" method="POST" enctype="multipart/form-data">
+                    <input type="hidden" name="workspace" value="{{ workspace_name }}">
+                    <input type="hidden" name="folder" id="selectedFolder">
+                    <input type="file" name="files" multiple>
+                    <button type="submit" id="uploadButton">Upload Files</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function loadFiles(folder) {
+            document.getElementById('selectedFolder').value = folder;
+            document.getElementById('uploadForm').style.display = 'block';
+            document.getElementById('fileList').innerHTML = '';
+
+            fetch(`/list_files/{{ workspace_name }}/${folder}`)
+                .then(response => response.json())
+                .then(data => {
+                    if (data.error) {
+                        alert(data.error);
+                        return;
+                    }
+                    const fileList = document.getElementById('fileList');
+                    data.files.forEach(file => {
+                        const li = document.createElement('li');
+                        li.textContent = file;
+                        const deleteButton = document.createElement('button');
+                        deleteButton.textContent = 'Delete';
+                        deleteButton.classList.add('delete-btn');
+                        deleteButton.onclick = function() { deleteFile(file, folder); };
+                        li.appendChild(deleteButton);
+                        fileList.appendChild(li);
+                    });
+                })
+                .catch(error => {
+                    console.error('Error fetching files:', error);
+                });
+        }
+
+        function deleteFile(file, folder) {
+            if (!confirm(`Are you sure you want to delete the file "${file}"?`)) return;
+
+            fetch(`/delete_file/{{ workspace_name }}/${folder}/${file}`, {
+                method: 'POST'
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.success) {
+                    alert('File deleted successfully');
+                    loadFiles(folder);
+                } else {
+                    alert('Error deleting file');
+                }
+            })
+            .catch(error => {
+                console.error('Error deleting file:', error);
+            });
+        }
+    </script>
+</body>
+</html>
