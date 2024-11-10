@@ -5,6 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login</title>
     <style>
+        /* Basic reset and body styling */
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
         body {
             font-family: 'Courier New', Courier, monospace;
             background: linear-gradient(135deg, #001f3f, #0074D9);
@@ -14,21 +21,69 @@
             justify-content: center;
             align-items: center;
             height: 100vh;
+            overflow: hidden;
         }
+
+        /* Marquee styling */
+        .marquee {
+            position: absolute;
+            top: 20px;
+            width: 100%;
+            color: #121211;
+            font-size: 1.2em;
+            font-weight: bold;
+            overflow: hidden;
+            white-space: nowrap;
+        }
+
+        .marquee-text {
+            display: inline-block;
+            padding-left: 100%;
+            animation: scroll 10s linear infinite;
+        }
+
+        @keyframes scroll {
+            from {
+                transform: translateX(100%);
+            }
+            to {
+                transform: translateX(-100%);
+            }
+        }
+
+        /* Login container with glassmorphism styling */
         .login-container {
             background: rgba(255, 255, 255, 0.1);
-            padding: 20px;
-            border-radius: 5px;
-            width: 300px;
+            border-radius: 35px;
+            padding: 50px;
+            width: 400px;
             text-align: center;
+            box-shadow: 0 4px 30px rgba(0, 0, 0, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            transition: transform 0.4s ease;
+            animation: fadeIn 0.5s ease;
         }
+
+        /* Input fields */
         input {
             margin: 10px 0;
             padding: 10px;
             width: 100%;
             border: none;
             border-radius: 5px;
+            background-color: rgba(21, 20, 20, 0.927);
+            color: white;
+            font-size: 1em;
+            outline: none;
+            transition: background-color 0.3s ease;
         }
+
+        input:focus {
+            background-color: rgba(255, 255, 255, 0.5);
+        }
+
+        /* Button styling */
         button {
             padding: 10px 20px;
             background-color: #0074D9;
@@ -36,24 +91,65 @@
             border-radius: 5px;
             cursor: pointer;
             color: white;
+            width: 100%;
+            font-size: 1em;
+            font-weight: bold;
+            transition: background-color 0.3s ease, transform 0.2s ease;
         }
+
         button:hover {
             background-color: #0056b3;
+            transform: scale(1.05);
         }
+
+        /* Flash message styling */
         .flash {
             margin: 10px 0;
             padding: 10px;
             border-radius: 5px;
+            font-size: 0.9em;
+            animation: slideIn 0.6s ease;
         }
+
         .success {
-            background-color: #28a745;
+            background-color: rgba(40, 167, 69, 0.8);
         }
+
         .error {
-            background-color: #dc3545;
+            background-color: rgba(220, 53, 69, 0.8);
+        }
+
+        /* Animations */
+        @keyframes fadeIn {
+            from {
+                opacity: 0;
+                transform: translateY(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateX(-20px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
         }
     </style>
 </head>
 <body>
+    <!-- Marquee for announcements or greetings -->
+    <div class="marquee">
+        <span class="marquee-text">Welcome to our secure login portal! Please enter your credentials below.</span>
+    </div>
+
+    <!-- Glassmorphic Login Form -->
     <div class="login-container">
         <h2>Login</h2>
         <form action="{{ url_for('index') }}" method="post">
@@ -62,6 +158,7 @@
             <input type="password" name="password" placeholder="Password" required>
             <button type="submit">Login</button>
         </form>
+        <!-- Flash messages for success or error -->
         {% with messages = get_flashed_messages(with_categories=true) %}
             {% if messages %}
                 {% for category, message in messages %}
