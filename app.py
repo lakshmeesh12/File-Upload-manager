@@ -26,14 +26,29 @@ def index():
         password = request.form.get('password')
         
         if tenant_id and username and password:  
-            session['tenantId'] = tenant_id
-            session['username'] = username
-            flash("Logged in successfully!", "success")
-            return redirect(url_for('workspace'))
-        
-        flash("Login failed. Please check your credentials.", "error")
+            # Check if credentials match any document in MongoDB
+            user_data = collection.find_one({
+                "tenantId": tenant_id,
+                "users": {
+                    "$elemMatch": {
+                        "username": username,
+                        "password": password
+                    }
+                }
+            })
+
+            if user_data:
+                # Login successful
+                session['tenantId'] = tenant_id
+                session['username'] = username
+                flash("Logged in successfully!", "success")
+                return redirect(url_for('workspace'))
+            else:
+                # Login failed
+                flash("Login failed. Please check your credentials.", "error")
 
     return render_template('index.html')
+
 
 @app.route('/workspace', methods=['GET', 'POST'])
 def workspace():
@@ -60,7 +75,6 @@ def workspace():
             if any(w['workspaceName'] == workspace_name for w in workspaces):
                 flash('Workspace already exists', 'error')
             else:
-                # Create new workspace data
                 new_workspace = {
                     "workspaceUUID": str(uuid.uuid4()),
                     "workspaceName": workspace_name,
@@ -71,17 +85,14 @@ def workspace():
                     ]
                 }
 
-                # Update database with new workspace
                 result = collection.update_one(
                     {"tenantId": tenant_id},
                     {"$addToSet": {"users.$[user].workspaces": new_workspace}},
                     array_filters=[{"user.username": user_name}]
                 )
 
-                # Create workspace directories
                 workspace_dir = os.path.join(LOCAL_STORAGE_BASE, tenant_id, user_name, workspace_name)
 
-                # Ensure only the specified folders are created
                 os.makedirs(workspace_dir, exist_ok=True)
                 for folder in new_workspace['folders']:
                     folder_path = os.path.join(workspace_dir, folder['folderName'])
@@ -89,11 +100,12 @@ def workspace():
 
                 if result.modified_count > 0:
                     flash('Workspace created successfully!', 'success')
-                    return redirect(url_for('folder', workspace_name=workspace_name))  # Pass workspace name to folder
+                    return redirect(url_for('folder', workspace_name=workspace_name))
                 else:
                     flash('Failed to create workspace', 'error')
 
     return render_template('create_workspace.html', workspaces=workspaces)
+
 
 @app.route('/delete_workspace/<workspace_uuid>', methods=['POST'])
 def delete_workspace(workspace_uuid):
@@ -293,6 +305,82 @@ def delete_file(workspace, folder, file_name):
 
     except Exception as e:
         return jsonify({"error": f"Failed to delete file: {str(e)}"}), 500
+
+@app.route('/update_file/<workspace>/<folder>/<file_name>', methods=['POST'])
+def update_file(workspace, folder, file_name):
+    tenant_id = session.get('tenantId')
+    user_name = session.get('username')
+
+    if not tenant_id or not user_name:
+        return jsonify({"success": False, "error": "Session expired, please log in again."})
+
+    folder_path = os.path.join(LOCAL_STORAGE_BASE, tenant_id, user_name, workspace, folder)
+    old_file_path = os.path.join(folder_path, file_name)
+
+    if 'new_file' not in request.files:
+        return jsonify({"success": False, "error": "No file selected for update."})
+
+    new_file = request.files['new_file']
+    new_file_path = os.path.join(folder_path, new_file.filename)
+
+    try:
+        if os.path.exists(old_file_path):
+            os.remove(old_file_path)
+            collection.update_one(
+                {
+                    "tenantId": tenant_id,
+                    "users.username": user_name,
+                    "users.workspaces.workspaceName": workspace,
+                    "users.workspaces.folders.folderName": folder
+                },
+                {
+                    "$pull": {
+                        "users.$[user].workspaces.$[workspace].folders.$[folder].contents": {"filename": file_name}
+                    }
+                },
+                array_filters=[
+                    {"user.username": user_name},
+                    {"workspace.workspaceName": workspace},
+                    {"folder.folderName": folder}
+                ]
+            )
+
+        new_file.save(new_file_path)
+        file_metadata = {
+            "filename": new_file.filename,
+            "size": os.path.getsize(new_file_path),
+            "upload_time": datetime.utcnow(),
+            "mime_type": mimetypes.guess_type(new_file.filename)[0] or "application/octet-stream",
+            "hash": hashlib.sha256(open(new_file_path, 'rb').read()).hexdigest()
+        }
+
+        result = collection.update_one(
+            {
+                "tenantId": tenant_id,
+                "users.username": user_name,
+                "users.workspaces.workspaceName": workspace,
+                "users.workspaces.folders.folderName": folder
+            },
+            {
+                "$push": {
+                    "users.$[user].workspaces.$[workspace].folders.$[folder].contents": file_metadata
+                }
+            },
+            array_filters=[
+                {"user.username": user_name},
+                {"workspace.workspaceName": workspace},
+                {"folder.folderName": folder}
+            ]
+        )
+
+        if result.modified_count > 0:
+            return jsonify({"success": True})
+        else:
+            return jsonify({"success": False, "error": "Failed to update file metadata in MongoDB."})
+
+    except Exception as e:
+        return jsonify({"success": False, "error": f"Error updating file: {str(e)}"})
+
 
 
 
