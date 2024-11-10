@@ -11,7 +11,7 @@
             margin: 0;
             padding: 0;
         }
-  
+
         body, html {
             height: 100%;
             font-family: Arial, sans-serif;
@@ -27,13 +27,12 @@
         }
 
         .sidebar {
-        width: 25%;
-        background-color: #333;
-        color: white;
-        padding: 10px;
-        overflow-y: auto; /* Only vertical scrolling */
-        overflow-x: auto; /* Disable horizontal scrolling */
-    }
+            width: 25%;
+            background-color: #333;
+            color: white;
+            padding: 10px;
+            overflow-y: auto;
+        }
 
         .file-list {
             list-style-type: none;
@@ -41,30 +40,33 @@
         }
 
         .file-list li {
-        padding: 10px;
-        cursor: pointer;
-        border-bottom: 1px solid #555;
-        display: flex;
-        justify-content: space-between;
-        align-items: center;
-        transition: background 0.3s;
-        font-size: 14px; /* Reduce font size for a cleaner look */
-    }
+            padding: 10px;
+            cursor: pointer;
+            border-bottom: 1px solid #555;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            transition: background 0.3s;
+            font-size: 14px;
+        }
 
         .file-list li:hover {
             background-color: #555;
         }
 
-        .delete-btn {
-        background-color: red;
-        color: white;
-        border: none;
-        padding: 5px 8px;
-        font-size: 12px; /* Smaller font size for the delete button */
-        cursor: pointer;
-        border-radius: 5px;
-        white-space: nowrap;
+        .delete-btn, .update-btn {
+            color: white;
+            border: none;
+            padding: 5px 8px;
+            font-size: 12px;
+            cursor: pointer;
+            border-radius: 5px;
+            white-space: nowrap;
+            margin-left: 5px;
         }
+
+        .delete-btn { background-color: red; }
+        .update-btn { background-color: #b0b0b0; }
 
         /* Main content styling */
         .content {
@@ -125,18 +127,9 @@
             transform: scale(1.2);
         }
 
-        /* Unique background colors */
-        .endoc {
-            background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%);
-        }
-
-        .ensight {
-            background: linear-gradient(135deg, #ff4b1f 0%, #ff9068 100%);
-        }
-
-        .envision {
-            background: linear-gradient(135deg, #1e90ff 0%, #00bfff 100%);
-        }
+        .endoc { background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%); }
+        .ensight { background: linear-gradient(135deg, #ff4b1f 0%, #ff9068 100%); }
+        .envision { background: linear-gradient(135deg, #1e90ff 0%, #00bfff 100%); }
 
         /* Upload form styling */
         #uploadForm {
@@ -165,17 +158,63 @@
         #uploadButton:hover {
             background-color: #45a049;
         }
+
+        /* Update form styling */
+        #updateForm {
+            display: none;
+            position: absolute;
+            top: 5%;
+            left: 50%;
+            transform: translate(-50%, -20%);
+            width: 300px;
+            padding: 20px;
+            background: rgba(255, 255, 255, 0.9); /* Semi-transparent background */
+            border-radius: 10px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+            text-align: center;
+        }
+
+        #updateForm input[type="file"] {
+            margin-top: 10px;
+            width: 100%;
+        }
+
+        #updateForm button {
+            margin-top: 10px;
+            padding: 8px 16px;
+            font-size: 0.9em;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            transition: background-color 0.3s ease;
+        }
+
+        #updateForm button[type="submit"] {
+            background-color: #4CAF50;
+            color: white;
+        }
+
+        #updateForm button[type="submit"]:hover {
+            background-color: #45a049;
+        }
+
+        #updateForm button[type="button"] {
+            background-color: #ff6347;
+            color: white;
+        }
+
+        #updateForm button[type="button"]:hover {
+            background-color: #e55347;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <!-- Sidebar for file listing -->
         <div class="sidebar">
             <h3>Files in Folder</h3>
             <ul id="fileList" class="file-list"></ul>
         </div>
 
-        <!-- Main content -->
         <div class="content">
             <h1>Select Your Folder</h1>
             <div class="storage-options">
@@ -193,7 +232,6 @@
                 </div>
             </div>
 
-            <!-- Upload form -->
             <div id="uploadForm">
                 <form id="formUpload" action="{{ url_for('upload_files') }}" method="POST" enctype="multipart/form-data">
                     <input type="hidden" name="workspace" value="{{ workspace_name }}">
@@ -202,8 +240,18 @@
                     <button type="submit" id="uploadButton">Upload Files</button>
                 </form>
             </div>
+
+            <div id="updateForm">
+                <form id="formUpdate" onsubmit="submitUpdate(); return false;">
+                    <input type="file" id="newFileInput" name="new_file">
+                    <button type="submit">Confirm Update</button>
+                    <button type="button" onclick="cancelUpdate();">Cancel</button>
+                </form>
+            </div>
         </div>
     </div>
+
+
 
     <script>
         function loadFiles(folder) {
@@ -222,37 +270,88 @@
                     data.files.forEach(file => {
                         const li = document.createElement('li');
                         li.textContent = file;
+
+                        const updateButton = document.createElement('button');
+                        updateButton.textContent = 'Update';
+                        updateButton.classList.add('update-btn');
+                        updateButton.onclick = function() { showUpdateForm(file, folder); };
+                        li.appendChild(updateButton);
+
                         const deleteButton = document.createElement('button');
                         deleteButton.textContent = 'Delete';
                         deleteButton.classList.add('delete-btn');
                         deleteButton.onclick = function() { deleteFile(file, folder); };
                         li.appendChild(deleteButton);
+
                         fileList.appendChild(li);
                     });
                 })
-                .catch(error => {
-                    console.error('Error fetching files:', error);
-                });
+                .catch(error => console.error('Error fetching files:', error));
+        }
+
+        function showUpdateForm(file, folder) {
+            document.getElementById('newFileInput').value = '';
+            document.getElementById('updateForm').style.display = 'block';
+            document.getElementById('formUpdate').dataset.fileName = file;
+            document.getElementById('formUpdate').dataset.folder = folder;
+        }
+
+        function submitUpdate() {
+    const file = document.getElementById('formUpdate').dataset.fileName;
+    const folder = document.getElementById('formUpdate').dataset.folder;
+    const workspace = "{{ workspace_name }}";
+    const newFile = document.getElementById('newFileInput').files[0];
+
+    if (!newFile) {
+        alert("Please select a file to update.");
+        return;
+    }
+
+    if (!confirm(`Do you want to update the file '${file}'?`)) return;
+
+    const formData = new FormData();
+    formData.append('new_file', newFile);
+
+    // Including file_name in the URL as expected by the route
+    fetch(`/update_file/${workspace}/${folder}/${file}`, {
+        method: 'POST',
+        body: formData
+    })
+    .then(response => response.json())
+    .then(data => {
+        if (data.success) {
+            alert("File updated successfully!");
+            loadFiles(folder); // Reload files to reflect the update
+            cancelUpdate();
+        } else {
+            alert("Failed to update the file. " + (data.error || ""));
+        }
+    })
+    .catch(error => console.error('Error updating file:', error));
+}
+
+
+        function cancelUpdate() {
+            document.getElementById('updateForm').style.display = 'none';
         }
 
         function deleteFile(file, folder) {
-            if (!confirm(`Are you sure you want to delete the file "${file}"?`)) return;
+            const workspace = "{{ workspace_name }}";
+            if (!confirm(`Do you want to delete the file '${file}'?`)) return;
 
-            fetch(`/delete_file/{{ workspace_name }}/${folder}/${file}`, {
+            fetch(`/delete_file/${workspace}/${folder}/${file}`, {
                 method: 'POST'
             })
             .then(response => response.json())
             .then(data => {
-                if (data.success) {
-                    alert('File deleted successfully');
-                    loadFiles(folder);
+                if (data.error) {
+                    alert(data.error);
                 } else {
-                    alert('Error deleting file');
+                    alert(data.success);
+                    loadFiles(folder);
                 }
             })
-            .catch(error => {
-                console.error('Error deleting file:', error);
-            });
+            .catch(error => console.error('Error deleting file:', error));
         }
     </script>
 </body>
