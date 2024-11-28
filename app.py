@@ -1,22 +1,52 @@
-from flask import Flask, render_template, request, redirect, url_for, flash, jsonify, session
+from flask import Flask, render_template, request, redirect, url_for, flash, session
 from pymongo import MongoClient
 import os
 import uuid
-import shutil 
-from datetime import datetime
-import mimetypes
 import hashlib
+from datetime import datetime
+import shutil
+from werkzeug.utils import secure_filename
+from PyPDF2 import PdfFileReader
+from docx import Document
+import pandas as pd
+from PIL import Image
+import piexif
+from PyPDF2 import PdfReader
+from docx import Document
+from PIL import Image, ExifTags
+import re
+import openpyxl
+from PIL import Image, ExifTags
+import io
 
 
 app = Flask(__name__)
 app.secret_key = "supersecretkey"
 
-mongo_uri = "mongodb://127.0.0.1:27017/5000?directConnection=true&serverSelectionTimeoutMS=2000&appName=mongosh+2.3.3"
+# MongoDB Configuration
+mongo_uri = "mongodb://127.0.0.1:27017/"
 client = MongoClient(mongo_uri)
 db = client['Lakshmeesh']
-collection = db['upload']
+tenant_collection = db['tenant']
 
 LOCAL_STORAGE_BASE = 'local_storage'
+
+
+def get_user_module_path(tenant_id, username, module_name, workspace_name=None):
+    """Construct the local storage path based on tenant, user, module, and optional workspace."""
+    path = os.path.join(LOCAL_STORAGE_BASE, tenant_id, username, module_name)
+    if workspace_name:
+        path = os.path.join(path, workspace_name)
+    return path
+
+
+def create_module_collection(tenant_id, username, module_name):
+    """Create a module-specific collection for a user."""
+    collection_name = f"{tenant_id}_{username}_{module_name}"
+    if collection_name not in db.list_collection_names():
+        db.create_collection(collection_name)
+    return db[collection_name]
+
 
 @app.route('/', methods=['GET', 'POST'])
 def index():
@@ -24,10 +54,9 @@ def index():
         tenant_id = request.form.get('tenantId')
         username = request.form.get('username')
         password = request.form.get('password')
-        
-        if tenant_id and username and password:  
-            # Check if credentials match any document in MongoDB
-            user_data = collection.find_one({
+
+        if tenant_id and username and password:
+            user_data = tenant_collection.find_one({
                 "tenantId": tenant_id,
                 "users": {
                     "$elemMatch": {
@@ -36,249 +65,599 @@ def index():
                     }
                 }
             })
-
             if user_data:
-                # Login successful
                 session['tenantId'] = tenant_id
                 session['username'] = username
                 flash("Logged in successfully!", "success")
-                return redirect(url_for('workspace'))
+                return redirect(url_for('select_folder'))
             else:
-                # Login failed
                 flash("Login failed. Please check your credentials.", "error")
-
     return render_template('index.html')
+
+
+@app.route('/select_folder', methods=['GET', 'POST'])
+def select_folder():
+    tenant_id = session.get('tenantId')
+    username = session.get('username')
+
+    if not tenant_id or not username:
+        flash("Session expired, please log in again.", "error")
+        return redirect(url_for('index'))
+
+    modules = ["endoc", "ensight", "envision"]
+
+    if request.method == 'POST':
+        module_name = request.form.get('folder')
+        if module_name:
+            session['module_name'] = module_name
+            return redirect(url_for('workspace'))
+        else:
+            flash("Please select a module.", "error")
+
+    return render_template('select_folder.html', modules=modules)
 
 
 @app.route('/workspace', methods=['GET', 'POST'])
 def workspace():
     tenant_id = session.get('tenantId')
-    user_name = session.get('username')
+    username = session.get('username')
+    module_name = session.get('module_name')
 
-    if not tenant_id or not user_name:
-        flash("Session expired, please log in again.", "error")
-        return redirect(url_for('index'))
-
-    user_data = collection.find_one(
-        {
-            "tenantId": tenant_id,
-            "users.username": user_name
-        },
-        {"users.$": 1}
-    )
-
-    workspaces = user_data['users'][0].get('workspaces', []) if user_data and 'users' in user_data else []
+    if not all([tenant_id, username, module_name]):
+        flash("Session expired or module not selected.", "error")
+        return redirect(url_for('select_folder'))
 
     if request.method == 'POST':
         workspace_name = request.form.get('workspace_name')
+        selected_workspace = request.form.get('selected_workspace')
+
         if workspace_name:
-            if any(w['workspaceName'] == workspace_name for w in workspaces):
-                flash('Workspace already exists', 'error')
+            # Check if the workspace already exists
+            existing_workspace = tenant_collection.find_one({
+                "tenantId": tenant_id,
+                "module": module_name,
+                "workspaceName": workspace_name,
+                "username": username
+            })
+
+            if existing_workspace:
+                flash("Workspace already exists.", "error")
             else:
-                new_workspace = {
-                    "workspaceUUID": str(uuid.uuid4()),
+                # Assign UUIDs for workspace and user
+                workspace_uuid = str(uuid.uuid4())
+
+                # Insert workspace metadata
+                tenant_collection.insert_one({
+                    "tenantId": tenant_id,
+                    "module": module_name,
                     "workspaceName": workspace_name,
-                    "folders": [
-                        {"folderName": "endoc", "contents": []},
-                        {"folderName": "ensight", "contents": []},
-                        {"folderName": "envision", "contents": []}
-                    ]
-                }
+                    "workspaceUUID": workspace_uuid,
+                    "username": username,
+                    "files": []
+                })
 
-                result = collection.update_one(
-                    {"tenantId": tenant_id},
-                    {"$addToSet": {"users.$[user].workspaces": new_workspace}},
-                    array_filters=[{"user.username": user_name}]
-                )
+                # Create the workspace directory in local storage
+                workspace_path = get_user_module_path(tenant_id, username, module_name, workspace_name)
+                os.makedirs(workspace_path, exist_ok=True)
 
-                workspace_dir = os.path.join(LOCAL_STORAGE_BASE, tenant_id, user_name, workspace_name)
+                flash("Workspace created successfully!", "success")
+                session['workspace_name'] = workspace_name
+                return redirect(url_for('upload_files'))
 
-                os.makedirs(workspace_dir, exist_ok=True)
-                for folder in new_workspace['folders']:
-                    folder_path = os.path.join(workspace_dir, folder['folderName'])
-                    os.makedirs(folder_path, exist_ok=True)
+        elif selected_workspace:
+            # Handle existing workspace selection
+            session['workspace_name'] = selected_workspace
+            flash(f"Workspace '{selected_workspace}' selected.", "success")
+            return redirect(url_for('upload_files'))
 
-                if result.modified_count > 0:
-                    flash('Workspace created successfully!', 'success')
-                    return redirect(url_for('folder', workspace_name=workspace_name))
-                else:
-                    flash('Failed to create workspace', 'error')
+        else:
+            flash("Please enter a workspace name or select an existing workspace.", "error")
 
-    return render_template('create_workspace.html', workspaces=workspaces)
-
+    # Fetch all workspaces created by the user for the selected module
+    workspaces = tenant_collection.find({
+        "tenantId": tenant_id,
+        "module": module_name,
+        "username": username
+    })
+    return render_template('create_workspace_in_folder.html', workspaces=workspaces)
 
 @app.route('/delete_workspace/<workspace_uuid>', methods=['POST'])
 def delete_workspace(workspace_uuid):
     tenant_id = session.get('tenantId')
     user_name = session.get('username')
+    module_name = session.get('module_name')  # Get the module_name from the session
 
-    if not tenant_id or not user_name:
+    if not tenant_id or not user_name or not module_name:  # Check if module_name is also available
         flash("Session expired, please log in again.", "error")
         return redirect(url_for('index'))
 
-    # Check if workspace exists for this user
-    user_data = collection.find_one(
+    # Check if workspace exists for this user by workspaceUUID and workspaceName
+    user_data = tenant_collection.find_one(
         {
             "tenantId": tenant_id,
-            "users.username": user_name,
-            "users.workspaces.workspaceUUID": workspace_uuid
-        },
-        {"users.$": 1}
+            "module": module_name,
+            "username": user_name,
+            "workspaceUUID": workspace_uuid  # Ensure we're targeting the correct workspace
+        }
     )
 
     if not user_data:
-        flash('Workspace does not exist', 'error')
+        flash('Workspace does not exist or you do not have access to it.', 'error')
         return redirect(url_for('workspace'))
 
-    # Get workspace name to construct the local path
-    workspace_name = next((w['workspaceName'] for w in user_data['users'][0]['workspaces'] if w['workspaceUUID'] == workspace_uuid), None)
+    # Since workspaceUUID is a direct field, you can directly access it.
+    workspace_name = user_data.get('workspaceName')
 
-    # Attempt to delete the workspace in MongoDB
-    result = collection.update_one(
-        {"tenantId": tenant_id, "users.username": user_name},
-        {"$pull": {"users.$.workspaces": {"workspaceUUID": workspace_uuid}}}
-    )
+    if not workspace_name:
+        flash('Workspace name not found.', 'error')
+        return redirect(url_for('workspace'))
 
     # Construct local directory path
-    workspace_dir = os.path.join(LOCAL_STORAGE_BASE, tenant_id, user_name, workspace_name)
+    workspace_dir = get_user_module_path(tenant_id, user_name, module_name, workspace_name)
 
     # Remove local directory if it exists
     if os.path.exists(workspace_dir):
         try:
             shutil.rmtree(workspace_dir)
+            flash('Workspace and its files deleted successfully.', 'success')
         except Exception as e:
             flash(f'Failed to delete local workspace directory: {str(e)}', 'error')
 
-    if result.modified_count > 0:
-        flash('Workspace deleted successfully', 'success')
+    # Now, delete the entire workspace document from MongoDB
+    result = tenant_collection.delete_one(
+        {
+            "tenantId": tenant_id,
+            "module": module_name,
+            "username": user_name,
+            "workspaceUUID": workspace_uuid  # This will match the specific workspace document
+        }
+    )
+
+    if result.deleted_count > 0:
+        flash('Workspace metadata deleted successfully from MongoDB.', 'success')
     else:
-        flash('Failed to delete workspace', 'error')
+        flash('Failed to delete workspace metadata from MongoDB.', 'error')
 
     return redirect(url_for('workspace'))
 
-@app.route('/folder/<workspace_name>', methods=['GET', 'POST'])
-def folder(workspace_name):
-    tenant_id = session.get('tenantId')
-    user_name = session.get('username')
+def extract_metadata_for_endoc(file):
+    metadata = {}
 
-    if not tenant_id or not user_name:
-        flash("Session expired, please log in again.", "error")
-        return redirect(url_for('index'))
+    
+    url_pattern = r'https?://[^\s]+'
 
-    return render_template('folder.html', workspace_name=workspace_name)
+    if file.filename.endswith(".pdf"):
+        try:
+            
+            file.seek(0)  
+            reader = PdfReader(file)
+            document_info = reader.metadata  
+
+            metadata['title'] = document_info.get('/Title', 'Unknown') if document_info else 'Unknown'
+            metadata['author'] = document_info.get('/Author', 'Unknown') if document_info else 'Unknown'
+            metadata['num_pages'] = len(reader.pages)
+
+            
+            all_urls = []
+            for page in reader.pages:
+                text = page.extract_text() or ""
+                urls = re.findall(url_pattern, text)
+                all_urls.extend(urls)
+
+            metadata['urls'] = list(set(all_urls))  # Remove duplicates and store in metadata
+
+        except Exception as e:
+            metadata['error'] = f"Error extracting PDF metadata: {str(e)}"
+
+    elif file.filename.endswith((".doc", ".docx")):
+        try:
+            # Use python-docx for Word documents
+            file.seek(0)  # Reset file pointer
+            doc = Document(file)
+
+            metadata['title'] = doc.core_properties.title or "Unknown"
+            metadata['author'] = doc.core_properties.author or "Unknown"
+            metadata['num_paragraphs'] = len(doc.paragraphs)
+
+            # Extract and find URLs from the Word document
+            all_urls = []
+            for paragraph in doc.paragraphs:
+                text = paragraph.text.strip()
+                urls = re.findall(url_pattern, text)
+                all_urls.extend(urls)
+
+            metadata['urls'] = list(set(all_urls))  # Remove duplicates and store in metadata
+
+        except Exception as e:
+            metadata['error'] = f"Error extracting DOC/DOCX metadata: {str(e)}"
+
+    return metadata
 
 
-@app.route('/upload', methods=['POST'])
+def extract_metadata_for_ensight(file):
+    metadata = {}
+
+    # Regex for URL detection
+    url_pattern = r'https?://[^\s]+'
+
+    if file.filename.endswith((".xlsx", ".xlsm", ".csv")):
+        try:
+            if file.filename.endswith((".xlsx", ".xlsm")):
+                # Read Excel file with all sheets
+                df = pd.read_excel(file, sheet_name=None)
+            else:
+                # Read CSV file as a single sheet
+                df = {"Sheet1": pd.read_csv(file)}
+
+            for sheet_name, sheet_data in df.items():
+                sheet_metadata = {"columns": list(sheet_data.columns), "urls": [], "hyperlinks": {}}
+
+                # Extract URLs from cell values
+                for column in sheet_data.columns:
+                    column_values = sheet_data[column].astype(str)
+                    for value in column_values:
+                        urls = re.findall(url_pattern, value)
+                        sheet_metadata["urls"].extend(urls)  # Collect URLs
+
+                # Check for hyperlinks (specific to Excel files)
+                if file.filename.endswith((".xlsx", ".xlsm")):
+                    # Reload Excel as openpyxl to access hyperlinks
+                    workbook = openpyxl.load_workbook(file, data_only=True)
+                    if sheet_name in workbook.sheetnames:
+                        sheet = workbook[sheet_name]
+                        for row in sheet.iter_rows():
+                            for cell in row:
+                                if cell.hyperlink:
+                                    sheet_metadata["hyperlinks"][cell.coordinate] = cell.hyperlink.target
+
+                # Remove duplicate URLs
+                sheet_metadata["urls"] = list(set(sheet_metadata["urls"]))
+                metadata[sheet_name] = sheet_metadata
+
+        except Exception as e:
+            metadata['error'] = f"Error extracting Excel/CSV metadata: {str(e)}"
+
+    return metadata
+
+
+
+from PIL import Image, ExifTags
+import io
+
+def extract_metadata_for_envision(file):
+    metadata = {}
+
+    if file.filename.endswith((".jpeg", ".png", ".jpg", ".bmp", ".tiff", ".webp")):  # Added more formats
+        try:
+            file.seek(0)  # Reset file pointer
+            img = Image.open(file)
+
+            # Basic image metadata
+            metadata['width'], metadata['height'] = img.size
+            metadata['format'] = img.format
+            metadata['mode'] = img.mode  # Image mode (e.g., RGB, L)
+            metadata['size_in_kb'] = len(file.read()) // 1024  # Approximate size in KB
+
+
+            # Dominant color (if mode is RGB)
+            if img.mode == "RGB":
+                img.thumbnail((50, 50))  # Resize for efficiency
+                pixels = list(img.getdata())
+                dominant_color = max(set(pixels), key=pixels.count)
+                metadata['dominant_color'] = dominant_color
+
+            # Histogram (useful for analyzing image content)
+            metadata['histogram'] = img.histogram()
+
+        except Exception as e:
+            metadata['error'] = f"Error extracting image metadata: {str(e)}"
+
+    return metadata
+
+
+
+@app.route('/upload', methods=['GET', 'POST'])
 def upload_files():
     tenant_id = session.get('tenantId')
-    user_name = session.get('username')
-    workspace_name = request.form.get('workspace')
-    folder_name = request.form.get('folder') 
+    username = session.get('username')
+    module_name = session.get('module_name')
+    workspace_name = session.get('workspace_name')
 
-    if not all([tenant_id, user_name, workspace_name, folder_name]):
-        flash("Error: One or more required fields are missing.", "error")
-        return redirect(url_for('folder', workspace_name=workspace_name))
+    if not all([tenant_id, username, module_name, workspace_name]):
+        flash("Error: Missing required fields.", "error")
+        return redirect(url_for('workspace'))
 
-    upload_folder = os.path.join(LOCAL_STORAGE_BASE, tenant_id, user_name, workspace_name, folder_name)
-    os.makedirs(upload_folder, exist_ok=True)  
+    upload_folder = get_user_module_path(tenant_id, username, module_name, workspace_name)
+    os.makedirs(upload_folder, exist_ok=True)
 
-    files = request.files.getlist('files')
-    uploaded_files_metadata = []  # To store metadata for each uploaded file
-    duplicate_files = []  # To keep track of any duplicate files
-    uploaded_file_names = []  # To store names of successfully uploaded files
-    duplicate_file_names = []  # To store names of duplicate files
+    allowed_file_types = {
+        "endoc": [".pdf", ".doc", ".docx"],
+        "ensight": [".xlsx", ".csv", ".xlsm"],
+        "envision": [".jpeg", ".png", ".jpg", ".bmp", ".tiff", ".webp"]
+    }
 
-    # Query to retrieve the document and filter out the hashes in the specified folder manually
-    user_doc = collection.find_one({
-        "tenantId": tenant_id,
-        "users.username": user_name,
-        "users.workspaces.workspaceName": workspace_name,
-        "users.workspaces.folders.folderName": folder_name
-    })
+    if request.method == 'POST':
+        files = request.files.getlist('files')
+        uploaded_files_metadata = []
+        error_message = ""
 
-    # Extract the hashes if they exist in the returned document
-    folder_hashes = []
-    if user_doc:
-        for user in user_doc.get("users", []):
-            if user.get("username") == user_name:
-                for workspace in user.get("workspaces", []):
-                    if workspace.get("workspaceName") == workspace_name:
-                        for folder in workspace.get("folders", []):
-                            if folder.get("folderName") == folder_name:
-                                folder_hashes = [
-                                    content['hash'] for content in folder.get("contents", []) if "hash" in content
-                                ]
-                                break
-    print("Hashes in selected folder:", folder_hashes)
+        for file in files:
+            file_extension = os.path.splitext(file.filename)[1].lower()
 
-    for file in files:
-        # Calculate file hash (e.g., SHA-256) without saving the file first
-        hash_sha256 = hashlib.sha256()
-        for chunk in file.stream:
-            hash_sha256.update(chunk)
-        file_hash = hash_sha256.hexdigest()
+            if file_extension not in allowed_file_types.get(module_name, []):
+                error_message = f"Only {', '.join(allowed_file_types[module_name])} files are allowed for the {module_name} module."
+                break
 
-        print("File hash:", file_hash)
+            file_hash = hashlib.sha256(file.read()).hexdigest()
+            file.seek(0)
 
-        # Check if the hash already exists in the selected folder
-        if file_hash in folder_hashes:
-            # File is a duplicate
-            duplicate_files.append(file)
-            duplicate_file_names.append(file.filename)
-            continue  # Skip saving this file
-
-        # Reset file stream and save the file to the local storage since it's not a duplicate
-        file.seek(0)
-        file_path = os.path.join(upload_folder, file.filename)
-        file.save(file_path)
-
-        # Extract metadata for non-duplicate files
-        file_metadata = {
-            "filename": file.filename,
-            "size": os.path.getsize(file_path),
-            "upload_time": datetime.utcnow(),
-            "mime_type": mimetypes.guess_type(file.filename)[0] or "application/octet-stream",
-            "hash": file_hash,
-            "creation_time": datetime.fromtimestamp(os.path.getctime(file_path)),
-            "modification_time": datetime.fromtimestamp(os.path.getmtime(file_path)),
-            "access_time": datetime.fromtimestamp(os.path.getatime(file_path))
-        }
-        uploaded_files_metadata.append(file_metadata)
-        uploaded_file_names.append(file.filename)
-
-    # If there are new files to upload (i.e., no duplicates), update MongoDB
-    if uploaded_files_metadata:
-        result = collection.update_one(
-            {
-                "tenantId": tenant_id,
-                "users.username": user_name,
-                "users.workspaces.workspaceName": workspace_name,
-                "users.workspaces.folders.folderName": folder_name
-            },
-            {
-                "$push": {
-                    "users.$[user].workspaces.$[workspace].folders.$[folder].contents": {
-                        "$each": uploaded_files_metadata
-                    }
+            existing_file = tenant_collection.find_one(
+                {
+                    "tenantId": tenant_id,
+                    "module": module_name,
+                    "workspaceName": workspace_name,
+                    "files.hash": file_hash
                 }
-            },
-            array_filters=[
-                {"user.username": user_name},
-                {"workspace.workspaceName": workspace_name},
-                {"folder.folderName": folder_name}
-            ]
-        )
+            )
+            if existing_file:
+                flash(f"Duplicate file skipped: {file.filename}", "warning")
+                continue
 
-        if result.modified_count > 0:
-            flash("Files uploaded and metadata saved successfully!", "success")
-        else:
-            flash("Failed to save metadata in the database.", "error")
+            file_path = os.path.join(upload_folder, file.filename)
+            file.save(file_path)
 
-    if uploaded_file_names or duplicate_file_names:
-        return redirect(url_for('upload_result', uploaded=uploaded_file_names, duplicates=duplicate_file_names))
-    else:
-        flash("No new files uploaded due to duplicates.", "info")
-        return redirect(url_for('upload_duplicates'))
+            # Extract metadata separately based on the module
+            metadata = {}
+            if module_name == "endoc":
+                metadata = extract_metadata_for_endoc(file)
+            elif module_name == "ensight":
+                metadata = extract_metadata_for_ensight(file)
+            elif module_name == "envision":
+                metadata = extract_metadata_for_envision(file)
+
+            # File metadata
+            file_metadata = {
+                "filename": file.filename,
+                "hash": file_hash,
+                "upload_time": datetime.utcnow(),
+                "file_path": file_path,
+                "metadata": metadata  # Add extracted metadata here
+            }
+
+            uploaded_files_metadata.append(file_metadata)
+
+        if error_message:
+            flash(error_message, "error")
+        elif uploaded_files_metadata:
+            tenant_collection.update_one(
+                {
+                    "tenantId": tenant_id,
+                    "module": module_name,
+                    "workspaceName": workspace_name
+                },
+                {"$push": {"files": {"$each": uploaded_files_metadata}}}
+            )
+            flash("Files uploaded successfully!", "success")
+
+    # Fetch the list of files in the workspace
+    workspace_data = tenant_collection.find_one(
+        {
+            "tenantId": tenant_id,
+            "module": module_name,
+            "username": username,
+            "workspaceName": workspace_name
+        }
+    )
+    files_in_workspace = workspace_data.get('files', []) if workspace_data else []
+
+    return render_template('upload.html', selected_workspace=workspace_name, files_in_workspace=files_in_workspace)
+
+
+@app.route('/update_file/<file_hash>', methods=['POST'])
+def update_file(file_hash):
+    tenant_id = session.get('tenantId')
+    username = session.get('username')
+    module_name = session.get('module_name')
+    workspace_name = session.get('workspace_name')
+
+    if not all([tenant_id, username, module_name, workspace_name]):
+        flash("Error: Missing required fields.", "error")
+        return redirect(url_for('upload_files'))
+
+    upload_folder = get_user_module_path(tenant_id, username, module_name, workspace_name)
+
+    # Find the file in the database
+    workspace_data = tenant_collection.find_one(
+        {
+            "tenantId": tenant_id,
+            "module": module_name,
+            "workspaceName": workspace_name,
+            "files.hash": file_hash
+        }
+    )
+    if not workspace_data:
+        flash("Error: File not found for update.", "error")
+        return redirect(url_for('upload_files'))
+
+    # Get the uploaded file
+    new_file = request.files.get('file')
+    if not new_file:
+        flash("Error: No file provided for update.", "error")
+        return redirect(url_for('upload_files'))
+
+    # Validate file type
+    file_extension = os.path.splitext(new_file.filename)[1].lower()
+    allowed_file_types = {
+        "endoc": [".pdf", ".doc", ".docx"],
+        "ensight": [".xlsx", ".csv", ".xlsm"],
+        "envision": [".jpeg", ".png", ".jpg", ".bmp", ".tiff", ".webp"]
+    }
+    if file_extension not in allowed_file_types.get(module_name, []):
+        flash(f"Error: Only {', '.join(allowed_file_types[module_name])} files are allowed for the {module_name} module.", "error")
+        return redirect(url_for('upload_files'))
+
+    # Generate hash and check for duplicates
+    new_file_hash = hashlib.sha256(new_file.read()).hexdigest()
+    new_file.seek(0)
+    if tenant_collection.find_one(
+        {
+            "tenantId": tenant_id,
+            "module": module_name,
+            "workspaceName": workspace_name,
+            "files.hash": new_file_hash
+        }
+    ):
+        flash("Error: Duplicate file detected. Update aborted.", "error")
+        return redirect(url_for('upload_files'))
+
+    # Save the new file
+    new_file_path = os.path.join(upload_folder, new_file.filename)
+    new_file.save(new_file_path)
+
+    # Extract metadata for the new file
+    metadata = {}
+    if module_name == "endoc":
+        metadata = extract_metadata_for_endoc(new_file)
+    elif module_name == "ensight":
+        metadata = extract_metadata_for_ensight(new_file)
+    elif module_name == "envision":
+        metadata = extract_metadata_for_envision(new_file)
+
+    # Update the database: Replace the file's entry
+    tenant_collection.update_one(
+        {
+            "tenantId": tenant_id,
+            "module": module_name,
+            "workspaceName": workspace_name,
+            "files.hash": file_hash
+        },
+        {
+            "$set": {
+                "files.$.filename": new_file.filename,
+                "files.$.hash": new_file_hash,
+                "files.$.upload_time": datetime.utcnow(),
+                "files.$.file_path": new_file_path,
+                "files.$.metadata": metadata
+            }
+        }
+    )
+
+    # Delete the old file from local storage
+    old_file_path = os.path.join(upload_folder, workspace_data['files'][0]['filename'])
+    if os.path.exists(old_file_path):
+        os.remove(old_file_path)
+
+    flash("File updated successfully!", "success")
+    return redirect(url_for('upload_files'))
+
+
+
+
+@app.route('/delete_file/<file_hash>', methods=['POST'])
+def delete_file(file_hash):
+    tenant_id = session.get('tenantId')
+    username = session.get('username')
+    module_name = session.get('module_name')
+    workspace_name = session.get('workspace_name')
+
+    if not all([tenant_id, username, module_name, workspace_name]):
+        flash("Error: Missing required fields.", "error")
+        return redirect(url_for('workspace'))
+
+    # Find the file metadata in the database
+    workspace_data = tenant_collection.find_one(
+        {
+            "tenantId": tenant_id,
+            "module": module_name,
+            "username": username,
+            "workspaceName": workspace_name
+        }
+    )
+    file_metadata = next((file for file in workspace_data.get('files', []) if file['hash'] == file_hash), None)
+
+    if not file_metadata:
+        flash("File not found.", "error")
+        return redirect(url_for('upload_files'))
+
+    # Delete the file from local storage
+    file_path = os.path.join(get_user_module_path(tenant_id, username, module_name, workspace_name), file_metadata['filename'])
+    if os.path.exists(file_path):
+        os.remove(file_path)
+
+    # Remove the file metadata from the MongoDB collection
+    tenant_collection.update_one(
+        {
+            "tenantId": tenant_id,
+            "module": module_name,
+            "username": username,
+            "workspaceName": workspace_name
+        },
+        {"$pull": {"files": {"hash": file_hash}}}
+    )
+
+    flash(f"File '{file_metadata['filename']}' deleted successfully.", "success")
+    return redirect(url_for('upload_files'))
+
+
+
+# @app.route('/delete_workspace/<workspace_uuid>', methods=['POST'])
+# def delete_workspace(workspace_uuid):
+#     tenant_id = session.get('tenantId')
+#     user_name = session.get('username')
+#     module_name = session.get('module_name')  # Get the module_name from the session
+
+#     if not tenant_id or not user_name or not module_name:  # Check if module_name is also available
+#         flash("Session expired, please log in again.", "error")
+#         return redirect(url_for('index'))
+
+#     # Check if workspace exists for this user by workspaceUUID and workspaceName
+#     user_data = tenant_collection.find_one(
+#         {
+#             "tenantId": tenant_id,
+#             "module": module_name,
+#             "username": user_name,
+#             "workspaceUUID": workspace_uuid  # Ensure we're targeting the correct workspace
+#         }
+#     )
+
+#     if not user_data:
+#         flash('Workspace does not exist or you do not have access to it.', 'error')
+#         return redirect(url_for('workspace'))
+
+#     # Since workspaceUUID is a direct field, you can directly access it.
+#     workspace_name = user_data.get('workspaceName')
+
+#     if not workspace_name:
+#         flash('Workspace name not found.', 'error')
+#         return redirect(url_for('workspace'))
+
+#     # Construct local directory path
+#     workspace_dir = get_user_module_path(tenant_id, user_name, module_name, workspace_name)
+
+#     # Remove local directory if it exists
+#     if os.path.exists(workspace_dir):
+#         try:
+#             shutil.rmtree(workspace_dir)
+#             flash('Workspace and its files deleted successfully.', 'success')
+#         except Exception as e:
+#             flash(f'Failed to delete local workspace directory: {str(e)}', 'error')
+
+#     # Now, delete the entire workspace document from MongoDB
+#     result = tenant_collection.delete_one(
+#         {
+#             "tenantId": tenant_id,
+#             "module": module_name,
+#             "username": user_name,
+#             "workspaceUUID": workspace_uuid  # This will match the specific workspace document
+#         }
+#     )
+
+#     if result.deleted_count > 0:
+#         flash('Workspace metadata deleted successfully from MongoDB.', 'success')
+#     else:
+#         flash('Failed to delete workspace metadata from MongoDB.', 'error')
+
+#     return redirect(url_for('workspace'))
 
 
 @app.route('/upload_result')
@@ -308,148 +687,6 @@ def upload_result():
 def upload_duplicates():
     return "The file your trying to upload already exist in the workspace , if you want to replace it with a new one please use the update option."
 
-
-
-
-@app.route('/list_files/<workspace>/<folder>', methods=['GET'])
-def list_files(workspace, folder):
-    tenant_id = session.get('tenantId')
-    user_name = session.get('username')
-
-    if not tenant_id or not user_name:
-        return jsonify({"error": "Session expired, please log in again."}), 403
-
-    folder_path = os.path.join(LOCAL_STORAGE_BASE, tenant_id, user_name, workspace, folder)
-    if not os.path.exists(folder_path):
-        return jsonify({"error": "Folder not found"}), 404
-
-    files = os.listdir(folder_path)
-    return jsonify({"files": files})
-
-
-@app.route('/delete_file/<workspace>/<folder>/<file_name>', methods=['POST'])
-def delete_file(workspace, folder, file_name):
-    tenant_id = session.get('tenantId')
-    user_name = session.get('username')
-
-    if not tenant_id or not user_name:
-        return jsonify({"error": "Session expired, please log in again."}), 403
-
-    
-    folder_path = os.path.join(LOCAL_STORAGE_BASE, tenant_id, user_name, workspace, folder)
-    file_path = os.path.join(folder_path, file_name)
-
-    
-    if not os.path.exists(file_path):
-        return jsonify({"error": "File not found"}), 404
-
-    try:
-        
-        os.remove(file_path)
-
-        
-        result = collection.update_one(
-            {
-                "tenantId": tenant_id,
-                "users.username": user_name,
-                "users.workspaces.workspaceName": workspace,
-                "users.workspaces.folders.folderName": folder
-            },
-            {
-                "$pull": {
-                    "users.$[user].workspaces.$[workspace].folders.$[folder].contents": {"filename": file_name}
-                }
-            },
-            array_filters=[
-                {"user.username": user_name},
-                {"workspace.workspaceName": workspace},
-                {"folder.folderName": folder}
-            ]
-        )
-
-        
-        if result.modified_count > 0:
-            return jsonify({"success": f"File '{file_name}' and its metadata deleted successfully."}), 200
-        else:
-            return jsonify({"error": "Failed to delete file metadata from database."}), 500
-
-    except Exception as e:
-        return jsonify({"error": f"Failed to delete file: {str(e)}"}), 500
-
-@app.route('/update_file/<workspace>/<folder>/<file_name>', methods=['POST'])
-def update_file(workspace, folder, file_name):
-    tenant_id = session.get('tenantId')
-    user_name = session.get('username')
-
-    if not tenant_id or not user_name:
-        return jsonify({"success": False, "error": "Session expired, please log in again."})
-
-    folder_path = os.path.join(LOCAL_STORAGE_BASE, tenant_id, user_name, workspace, folder)
-    old_file_path = os.path.join(folder_path, file_name)
-
-    if 'new_file' not in request.files:
-        return jsonify({"success": False, "error": "No file selected for update."})
-
-    new_file = request.files['new_file']
-    new_file_path = os.path.join(folder_path, new_file.filename)
-
-    try:
-        if os.path.exists(old_file_path):
-            os.remove(old_file_path)
-            collection.update_one(
-                {
-                    "tenantId": tenant_id,
-                    "users.username": user_name,
-                    "users.workspaces.workspaceName": workspace,
-                    "users.workspaces.folders.folderName": folder
-                },
-                {
-                    "$pull": {
-                        "users.$[user].workspaces.$[workspace].folders.$[folder].contents": {"filename": file_name}
-                    }
-                },
-                array_filters=[
-                    {"user.username": user_name},
-                    {"workspace.workspaceName": workspace},
-                    {"folder.folderName": folder}
-                ]
-            )
-
-        new_file.save(new_file_path)
-        file_metadata = {
-            "filename": new_file.filename,
-            "size": os.path.getsize(new_file_path),
-            "upload_time": datetime.utcnow(),
-            "mime_type": mimetypes.guess_type(new_file.filename)[0] or "application/octet-stream",
-            "hash": hashlib.sha256(open(new_file_path, 'rb').read()).hexdigest()
-        }
-
-        result = collection.update_one(
-            {
-                "tenantId": tenant_id,
-                "users.username": user_name,
-                "users.workspaces.workspaceName": workspace,
-                "users.workspaces.folders.folderName": folder
-            },
-            {
-                "$push": {
-                    "users.$[user].workspaces.$[workspace].folders.$[folder].contents": file_metadata
-                }
-            },
-            array_filters=[
-                {"user.username": user_name},
-                {"workspace.workspaceName": workspace},
-                {"folder.folderName": folder}
-            ]
-        )
-
-        if result.modified_count > 0:
-            return jsonify({"success": True})
-        else:
-            return jsonify({"success": False, "error": "Failed to update file metadata in MongoDB."})
-
-    except Exception as e:
-        return jsonify({"success": False, "error": f"Error updating file: {str(e)}"})
 
 
 
