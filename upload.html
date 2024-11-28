@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Upload Files</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+        }
+        .container {
+            width: 70%;
+            margin: 0 auto;
+            text-align: center;
+            padding: 20px;
+        }
+        .sidebar {
+            width: 25%;
+            padding: 20px;
+            background-color: #f4f4f4;
+            border-right: 1px solid #ddd;
+        }
+        .file-list {
+            list-style-type: none;
+            padding: 0;
+        }
+        .file-list li {
+            padding: 5px;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            justify-content: space-between;
+        }
+        .file-list li button {
+            background-color: red;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        .file-list li button:hover {
+            background-color: darkred;
+        }
+        .form-group {
+            margin-bottom: 15px;
+        }
+        select, input, button {
+            padding: 10px;
+            width: 100%;
+            margin: 5px 0;
+        }
+        button {
+            background-color: #007bff;
+            color: white;
+            border: none;
+            cursor: pointer;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        .error {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <div class="sidebar">
+        <h3>Files in Workspace</h3>
+        <ul class="file-list">
+            {% for file in files_in_workspace %}
+                <li>
+                    {{ file.filename }} ({{ file.upload_time.strftime('%Y-%m-%d %H:%M:%S') }})
+                    <form action="{{ url_for('delete_file', file_hash=file.hash) }}" method="POST" style="display: inline;">
+                        <button type="submit" onclick="return confirm('Are you sure you want to delete {{ file.filename }}?')">Delete</button>
+                    </form>
+                    <form action="{{ url_for('update_file', file_hash=file.hash) }}" method="POST" enctype="multipart/form-data" style="display: inline;">
+                        <input type="file" name="file" required>
+                        <button type="submit" onclick="return confirm('Are you sure you want to update {{ file.filename }}?')">Update</button>
+                    </form>
+                </li>
+            {% endfor %}
+        </ul>
+        
+    </div>
+
+    <div class="container">
+        <h1>Upload Files to Workspace</h1>
+
+        <form action="{{ url_for('upload_files') }}" method="POST" enctype="multipart/form-data">
+            <div class="form-group">
+                <label for="files">Select Files:</label>
+                <input type="file" name="files" id="files" multiple required>
+            </div>
+            <input type="hidden" name="workspace" value="{{ session['workspace_name'] }}">
+            <button type="submit">Upload Files</button>
+        </form>
+
+        {% if error %}
+        <div class="error">{{ error }}</div>
+        {% endif %}
+    </div>
+</body>
+</html>

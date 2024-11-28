@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Workspace Management</title>
+    <style>
+        body {
+            font-family: 'Courier New', Courier, monospace;
+            background: linear-gradient(135deg, #001f3f, #0074D9);
+            color: #fff;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            height: 100vh;
+        }
+        .container {
+            display: flex;
+            flex-grow: 1;
+        }
+        .workspace-list {
+            width: 250px;
+            background-color: rgba(255, 255, 255, 0.1);
+            padding: 20px;
+            border-radius: 5px;
+            overflow-y: auto;
+            margin: 0;
+        }
+        .workspace-item {
+            position: relative;
+            background: rgba(255, 255, 255, 0.2);
+            padding: 10px;
+            margin: 5px 0;
+            border-radius: 5px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+            color: #fff;
+        }
+        .workspace-item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 8px 15px rgba(0, 0, 0, 0.2);
+        }
+        .remove-icon {
+            color: #dc3545;
+            cursor: pointer;
+            background: none;
+            border: none;
+            font-size: 16px;
+        }
+        .flash {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+        }
+        .success {
+            background-color: #28a745;
+        }
+        .error {
+            background-color: #dc3545;
+        }
+        .create-workspace {
+            flex-grow: 1;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        input[type="text"] {
+            padding: 10px;
+            width: 100%;
+            margin-bottom: 10px;
+            border: none;
+            border-radius: 5px;
+        }
+        button {
+            padding: 10px 20px;
+            background-color: #0074D9;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            color: white;
+            transition: background 0.3s;
+        }
+        button:hover {
+            background-color: #0056b3;
+        }
+        h1, h2 {
+            margin-bottom: 10px;
+        }
+        .sidebar-title {
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Sidebar for Workspace List -->
+        <div class="workspace-list">
+            <h1 class="sidebar-title">Your Workspaces</h1>
+            {% for workspace in workspaces %}
+                <div class="workspace-item">
+                    <a href="{{ url_for('upload_files', workspace_name=workspace.workspaceName) }}" style="flex-grow: 1; color: inherit; text-decoration: none;">
+                        {{ workspace.workspaceName }}
+                    </a>
+                    <form action="{{ url_for('delete_workspace', workspace_uuid=workspace.workspaceUUID) }}" method="post" style="margin: 0;">
+                        <button type="submit" class="remove-icon" title="Delete Workspace">🗑️</button>
+                    </form>
+                </div>
+            {% else %}
+                <div>No workspaces found.</div>
+            {% endfor %}
+        </div>
+
+        <!-- Right Section for Creating Workspaces -->
+        <div class="create-workspace">
+            <h2>Create New Workspace</h2>
+            <form action="{{ url_for('workspace') }}" method="post">
+                <input type="text" name="workspace_name" required placeholder="Enter Workspace Name">
+                <button type="submit">Create Workspace</button>
+            </form>
+            {% with messages = get_flashed_messages(with_categories=true) %}
+                {% if messages %}
+                    {% for category, message in messages %}
+                        <div class="flash {{ category }}">{{ message }}</div>
+                    {% endfor %}
+                {% endif %}
+            {% endwith %}
+        </div>
+    </div>
+</body>
+</html>

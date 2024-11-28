@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Select Folder</title>
+    <style>
+        body, html {
+            height: 100%;
+            margin: 0;
+            font-family: Arial, sans-serif;
+            background-color: #f0f2f5;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .storage-options {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+        }
+
+        .storage-card {
+            width: 200px;
+            height: 250px;
+            padding: 20px;
+            border-radius: 15px;
+            text-align: center;
+            color: white;
+            font-size: 1.2em;
+            cursor: pointer;
+            transition: transform 0.5s ease, box-shadow 0.5s ease;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+            position: relative;
+        }
+
+        .storage-card img {
+            width: 80px;
+            margin-bottom: 15px;
+            transition: transform 0.5s ease;
+        }
+
+        .storage-card:hover {
+            transform: scale(1.1);
+            box-shadow: 0 8px 30px rgba(0, 0, 0, 0.3);
+        }
+
+        .storage-card:hover img {
+            transform: scale(1.2);
+        }
+
+        .endoc { background: linear-gradient(135deg, #6a11cb 0%, #2575fc 100%); }
+        .ensight { background: linear-gradient(135deg, #ff4b1f 0%, #ff9068 100%); }
+        .envision { background: linear-gradient(135deg, #1e90ff 0%, #00bfff 100%); }
+    </style>
+</head>
+<body>
+    <div class="storage-options">
+        <div class="storage-card endoc" onclick="selectFolder('endoc')">
+            <img src="https://th.bing.com/th/id/OIP.YBMUxO5QF_lElLt_QeojKgHaE1?pid=ImgDet&w=178&h=116&c=7&dpr=1.5" alt="Endoc">
+            <p>Endoc</p>
+        </div>
+        <div class="storage-card ensight" onclick="selectFolder('ensight')">
+            <img src="https://th.bing.com/th/id/OIP.8DfcvZK3t8zbwxqdV4Ix4QHaD4?w=1200&h=630&rs=1&pid=ImgDetMain" alt="Ensight">
+            <p>Ensight</p>
+        </div>
+        <div class="storage-card envision" onclick="selectFolder('envision')">
+            <img src="https://static.vecteezy.com/system/resources/previews/026/529/458/original/simple-jpeg-file-icon-jpeg-extension-vector.jpg" alt="Envision">
+            <p>Envision</p>
+        </div>
+    </div>
+
+    <form id="folderForm" method="POST" style="display: none;">
+        <input type="hidden" name="folder" id="selectedFolder">
+    </form>
+
+    <script>
+        function selectFolder(folderName) {
+            document.getElementById('selectedFolder').value = folderName;
+            document.getElementById('folderForm').submit();
+        }
+    </script>
+</body>
+</html>
