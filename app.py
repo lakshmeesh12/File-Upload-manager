@@ -18,6 +18,10 @@ import re
 import openpyxl
 from PIL import Image, ExifTags
 import io
+from googleapiclient.discovery import build
+from google_auth_oauthlib.flow import InstalledAppFlow
+from google.auth.transport.requests import Request
+import pickle
 
 
 app = Flask(__name__)
@@ -355,6 +359,71 @@ def extract_metadata_for_envision(file):
     return metadata
 
 
+import pickle
+
+# Set up the Google Drive API credentials
+SCOPES = ['https://www.googleapis.com/auth/drive.readonly']
+
+
+@app.route('/connect_google_drive', methods=['GET'])
+def connect_google_drive():
+    credentials = None
+    creds_path = os.path.join(os.getcwd(), 'credentials.json')
+    token_path = os.path.join(os.getcwd(), 'token.pickle')
+
+    # Load existing token or generate a new one
+    if os.path.exists(token_path):
+        with open(token_path, 'rb') as token_file:
+            credentials = pickle.load(token_file)
+
+    if not credentials or not credentials.valid:
+        if credentials and credentials.expired and credentials.refresh_token:
+            credentials.refresh(Request())
+        else:
+            flow = InstalledAppFlow.from_client_secrets_file(creds_path, SCOPES)
+            credentials = flow.run_local_server(port=8082)
+        
+        # Save credentials for future use
+        with open(token_path, 'wb') as token_file:
+            pickle.dump(credentials, token_file)
+
+    # Connect to Google Drive
+    drive_service = build('drive', 'v3', credentials=credentials)
+
+    # List files in the user's Drive
+    results = drive_service.files().list(pageSize=10, fields="files(id, name)").execute()
+    items = results.get('files', [])
+
+    # Debugging: Print the raw API response
+    print(results)  # This will print the entire response from Google Drive API
+
+    if not items:
+        files_list = "No files found in Google Drive."
+    else:
+        files_list = [(file['name'], file['id']) for file in items]
+
+        for file in items:
+            try:
+                # Safely extract 'name' and 'id' from the file
+                name = file.get('name', 'Unnamed File')
+                file_id = file.get('id', 'No ID')
+                files_list.append((name, file_id))  # Appending tuple (name, file_id)
+            except ValueError as e:
+                print(f"Error unpacking file data: {e}")
+                continue
+
+    # Debugging step: Print files_list to check the structure
+    print(f"files_list: {files_list}")
+
+    # Ensure that the files_list is structured correctly for the template
+    if isinstance(files_list, str):
+        return files_list  # Return the message directly if no files are found
+    elif len(files_list) > 0 and isinstance(files_list[0], tuple):
+        return render_template('google_drive.html', files=files_list)
+    else:
+        return "Error: The files list is not structured correctly."
+
+
 
 @app.route('/upload', methods=['GET', 'POST'])
 def upload_files():
@@ -363,6 +432,12 @@ def upload_files():
     module_name = session.get('module_name')
     workspace_name = session.get('workspace_name')
 
+    # If 'workspace_name' is passed as a query parameter, update the session
+    if request.args.get('workspace_name'):
+        workspace_name = request.args.get('workspace_name')
+        session['workspace_name'] = workspace_name
+
+    # Validate required fields in session
     if not all([tenant_id, username, module_name, workspace_name]):
         flash("Error: Missing required fields.", "error")
         return redirect(url_for('workspace'))
@@ -439,18 +514,102 @@ def upload_files():
             )
             flash("Files uploaded successfully!", "success")
 
-    # Fetch the list of files in the workspace
+    # Fetch the list of files in the correct workspace and module
     workspace_data = tenant_collection.find_one(
         {
             "tenantId": tenant_id,
             "module": module_name,
-            "username": username,
-            "workspaceName": workspace_name
+            "workspaceName": workspace_name  # Ensure we query based on the selected workspace and module
         }
     )
+
+    # Fetch only the files associated with the workspace and module
     files_in_workspace = workspace_data.get('files', []) if workspace_data else []
 
     return render_template('upload.html', selected_workspace=workspace_name, files_in_workspace=files_in_workspace)
+
+@app.route('/upload_google_drive_files', methods=['POST'])
+def upload_google_drive_files():
+    # Get selected files from the form
+    selected_file_ids = request.form.getlist('selected_files')
+
+    if not selected_file_ids:
+        flash("No files selected for upload.", "error")
+        return redirect(url_for('connect_google_drive'))
+
+    # Set up Google Drive API credentials
+    creds_path = os.path.join(os.getcwd(), 'credentials.json')
+    token_path = os.path.join(os.getcwd(), 'token.pickle')
+
+    with open(token_path, 'rb') as token_file:
+        credentials = pickle.load(token_file)
+
+    drive_service = build('drive', 'v3', credentials=credentials)
+
+    # Get tenant, user, module, and workspace details
+    tenant_id = session.get('tenantId')
+    username = session.get('username')
+    module_name = session.get('module_name')
+    workspace_name = session.get('workspace_name')
+
+    if not all([tenant_id, username, module_name, workspace_name]):
+        flash("Missing session information.", "error")
+        return redirect(url_for('upload_files'))
+
+    upload_folder = get_user_module_path(tenant_id, username, module_name, workspace_name)
+    os.makedirs(upload_folder, exist_ok=True)
+
+    uploaded_files_metadata = []
+
+    for file_id in selected_file_ids:
+        # Get file metadata from Google Drive
+        file_metadata = drive_service.files().get(fileId=file_id).execute()
+        file_name = file_metadata.get('name', 'Unnamed File')
+
+        # Download file content
+        request = drive_service.files().get_media(fileId=file_id)
+        file_path = os.path.join(upload_folder, file_name)
+
+        with open(file_path, 'wb') as f:
+            downloader = MediaIoBaseDownload(f, request)
+            done = False
+            while not done:
+                status, done = downloader.next_chunk()
+
+        # Calculate file hash
+        with open(file_path, 'rb') as f:
+            file_hash = hashlib.sha256(f.read()).hexdigest()
+
+        # Check for duplicate files in DB
+        existing_file = tenant_collection.find_one({
+            "tenantId": tenant_id,
+            "module": module_name,
+            "workspaceName": workspace_name,
+            "files.hash": file_hash
+        })
+        if existing_file:
+            flash(f"Duplicate file skipped: {file_name}", "warning")
+            continue
+
+        # Add file metadata
+        uploaded_files_metadata.append({
+            "filename": file_name,
+            "hash": file_hash,
+            "upload_time": datetime.utcnow(),
+            "file_path": file_path
+        })
+
+    # Update DB with uploaded files
+    if uploaded_files_metadata:
+        tenant_collection.update_one(
+            {"tenantId": tenant_id, "module": module_name, "workspaceName": workspace_name},
+            {"$push": {"files": {"$each": uploaded_files_metadata}}}
+        )
+        flash("Files uploaded successfully!", "success")
+    else:
+        flash("No new files were uploaded.", "info")
+
+    return redirect(url_for('upload_files'))
 
 
 @app.route('/update_file/<file_hash>', methods=['POST'])
