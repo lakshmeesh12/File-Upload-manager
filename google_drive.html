@@ -1,0 +1,31 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Google Drive Files</title>
+</head>
+<body>
+    <h1>Files in Google Drive</h1>
+
+    <!-- Check if files list is not empty -->
+    {% if files != "No files found in Google Drive." %}
+        <form action="{{ url_for('upload_google_drive_files') }}" method="POST">
+            <ul>
+                {% for name, file_id in files %}
+                    <li>
+                        <input type="checkbox" name="selected_files" value="{{ file_id }}">
+                        {{ name }}
+                    </li>
+                {% endfor %}
+            </ul>
+            <button type="submit">Upload Selected Files</button>
+        </form>
+    {% else %}
+        <!-- Display message when no files are found -->
+        <p>{{ files }}</p>
+    {% endif %}
+
+    <a href="{{ url_for('upload_files') }}">Back to Upload</a>
+</body>
+</html>
